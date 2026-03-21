@@ -36,10 +36,26 @@ pub mod keyid;
 /// Cryptographically secure nonce generation.
 pub mod nonce;
 pub(crate) mod sf;
-mod sign;
-mod traits;
-mod types;
-mod verify;
+pub(crate) mod sign;
+pub(crate) mod traits;
+pub(crate) mod types;
+pub(crate) mod verify;
+
+/// EOA signer and verifier using pure `k256` ECDSA.
+#[cfg(feature = "k256")]
+pub mod eoa;
+
+/// Adapter for [`alloy_signer::Signer`] implementations.
+#[cfg(feature = "alloy")]
+pub mod alloy;
+
+/// Axum middleware for ERC-8128 signature verification.
+#[cfg(feature = "axum")]
+pub mod middleware;
+
+/// Reqwest client helpers for ERC-8128 signed requests.
+#[cfg(feature = "reqwest")]
+pub mod client;
 
 pub use error::Erc8128Error;
 pub use sign::sign_request;
