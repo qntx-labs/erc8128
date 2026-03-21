@@ -87,7 +87,7 @@ pub async fn verify_request(
             continue;
         };
 
-        let replayable = candidate.params.nonce.is_none();
+        let replayable = candidate.params.nonce.as_ref().is_none_or(String::is_empty);
 
         let Some(binding) = classify_binding(
             &candidate.components,

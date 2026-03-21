@@ -64,10 +64,6 @@ pub enum Erc8128Error {
     #[error("validity too long")]
     ValidityTooLong,
 
-    /// Non-replayable signature requires a nonce but none was provided.
-    #[error("nonce required")]
-    NonceRequired,
-
     /// Replayable (nonce-less) signature rejected by policy.
     #[error("replayable not allowed")]
     ReplayableNotAllowed,

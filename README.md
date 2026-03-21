@@ -26,7 +26,7 @@
 Type-safe Rust SDK for [ERC-8128][spec]: HTTP request authentication via
 [RFC 9421][rfc9421] message signatures with Ethereum accounts (EOA & ERC-1271).
 
-[Quick Start](#quick-start) | [Features](#feature-flags) | [Protocol](#erc-8128-protocol) | [API Reference][doc-url]
+[Quick Start](#quick-start) | [Features](#feature-flags) | [Protocol](#erc-8128-protocol) | [Examples](#examples) | [API Reference][doc-url]
 
 </div>
 
@@ -34,14 +34,14 @@ Type-safe Rust SDK for [ERC-8128][spec]: HTTP request authentication via
 
 ```toml
 [dependencies]
-erc8128 = { version = "0.2", features = ["k256"] }
+erc8128 = { version = "0.3", features = ["k256"] }
 ```
 
 ### Sign & Verify (in-memory roundtrip)
 
 ```rust
 use erc8128::{
-    NoNonceStore, Request, SignOptions, VerifyPolicy,
+    MemoryNonceStore, RejectReplayable, Request, SignOptions, VerifyPolicy,
     eoa::{EoaSigner, EoaVerifier},
     sign_request, verify_request,
 };
@@ -58,15 +58,18 @@ let request = Request {
 // Sign
 let signed = sign_request(&request, &signer, &SignOptions::default()).await?;
 
-// Verify (attach signature headers to request first)
-let result = verify_request(&req, &EoaVerifier, &NoNonceStore, &VerifyPolicy::default()).await?;
+// Attach signature headers, then verify
+let nonces = MemoryNonceStore::default();
+let result = verify_request(
+    &verify_req, &EoaVerifier, &nonces, &RejectReplayable, &VerifyPolicy::default(),
+).await?;
 println!("Authenticated: {} on chain {}", result.address, result.chain_id);
 ```
 
 ### reqwest Client
 
 ```toml
-erc8128 = { version = "0.2", features = ["k256", "reqwest"] }
+erc8128 = { version = "0.3", features = ["k256", "reqwest"] }
 ```
 
 ```rust
@@ -75,26 +78,36 @@ use erc8128::{SignOptions, client::signed_fetch, eoa::EoaSigner};
 let signer = EoaSigner::from_slice(&key, 1)?;
 let resp = signed_fetch(
     &reqwest::Client::new(),
-    reqwest::Method::POST, "https://api.example.com/orders",
+    reqwest::Method::POST,
+    "https://api.example.com/orders",
     &[("content-type", "application/json")],
     Some(b"{\"item\":\"widget\"}"),
-    &signer, &SignOptions::default(),
+    &signer,
+    &SignOptions::default(),
 ).await?;
 ```
 
 ### axum Server
 
 ```toml
-erc8128 = { version = "0.2", features = ["k256", "axum"] }
+erc8128 = { version = "0.3", features = ["k256", "axum"] }
 ```
 
 ```rust
 use axum::{Router, routing::post, Extension};
-use erc8128::{NoNonceStore, VerifyPolicy, VerifySuccess, eoa::EoaVerifier, middleware::Erc8128Layer};
+use erc8128::{
+    MemoryNonceStore, RejectReplayable, VerifyPolicy, VerifySuccess,
+    eoa::EoaVerifier, middleware::Erc8128Layer,
+};
 
 let app = Router::new()
     .route("/api", post(handler))
-    .layer(Erc8128Layer::new(EoaVerifier, NoNonceStore, VerifyPolicy::default()));
+    .layer(Erc8128Layer::new(
+        EoaVerifier,
+        MemoryNonceStore::default(),
+        RejectReplayable,
+        VerifyPolicy::default(),
+    ));
 
 async fn handler(Extension(auth): Extension<VerifySuccess>) -> String {
     format!("Hello, {}!", auth.address)
@@ -105,12 +118,27 @@ async fn handler(Extension(auth): Extension<VerifySuccess>) -> String {
 
 | Feature | Dependencies | Provides |
 | --- | --- | --- |
-| `k256` | `k256` | `eoa::EoaSigner` + `eoa::EoaVerifier` — out-of-the-box EOA signing & verification |
-| `alloy` | `alloy-signer` | `alloy::AlloySigner<S>` — adapter for any `alloy_signer::Signer` implementation |
+| `k256` | `k256` | `eoa::EoaSigner` + `eoa::EoaVerifier` — pure-Rust EOA signing & verification |
+| `alloy` | `alloy-signer` | `alloy::AlloySigner<S>` — adapter for any `alloy_signer::Signer` |
 | `axum` | `axum`, `tower` | `middleware::Erc8128Layer` — Tower middleware for automatic request verification |
-| `reqwest` | `reqwest` | `client::signed_fetch` — one-call signed HTTP requests |
+| `reqwest` | `reqwest` | `client::signed_fetch` + `client::RequestBuilderExt` — signed HTTP requests |
 
 The core crate (`sign_request`, `verify_request`, traits) has **zero** HTTP framework dependencies.
+
+## Examples
+
+```sh
+cargo run --example roundtrip      --features k256             # in-memory sign → verify
+cargo run --example reqwest_client --features k256,reqwest     # client-side signing
+cargo run --example axum_server    --features k256,axum        # server-side middleware
+cargo run --example e2e            --features k256,axum,reqwest # full end-to-end demo
+```
+
+The `e2e` example starts an axum server and a reqwest client in one process, demonstrating:
+
+1. Fresh signature → 200 OK
+2. Replay of the same signature → 401 (nonce already consumed)
+3. New signature with fresh nonce → 200 OK
 
 ## ERC-8128 Protocol
 
@@ -127,7 +155,7 @@ sequenceDiagram
 
     S->>S: Parse Signature-Input
     S->>S: Reconstruct signature base from request
-    S->>S: Verify Content-Digest (SHA-256)
+    S->>S: Verify Content-Digest (SHA-256 / SHA-512)
     S->>S: ecrecover / ERC-1271 verify
     S->>S: Nonce & expiry checks
 
@@ -146,21 +174,21 @@ sequenceDiagram
 | Mode | Nonce | Semantics |
 | --- | --- | --- |
 | **Non-Replayable** | Present | Each signature consumed **exactly once** via `NonceStore`. |
-| **Replayable** | Absent | Valid for any number of uses within the `[created, expires]` window. |
+| **Replayable** | Absent | Valid within the `[created, expires]` window. Requires [`ReplayablePolicy`][doc-url] with early invalidation hooks (Section 5.2). |
 
 ### Signature Parameters (RFC 9421)
 
 | Parameter | Required | Description |
 | --- | --- | --- |
 | `created` | Yes | Unix timestamp of signature creation. |
-| `expires` | Yes | Unix timestamp of signature expiration. |
+| `expires` | Yes | Unix timestamp of signature expiration (`> created`). |
 | `keyid` | Yes | Signer identity: `erc8128:<chainId>:<address>`. |
 | `nonce` | Non-Replayable | Cryptographically random replay-prevention token. |
 | `tag` | No | Application-level discriminator for routing. |
 
 ### Content-Digest
 
-Body integrity is protected by a `Content-Digest: sha-256=:<base64>:` header. Four modes control its behavior:
+Body integrity is protected via `Content-Digest` (SHA-256 or SHA-512). Four modes control signing behavior:
 
 | Mode | Behavior |
 | --- | --- |
@@ -171,13 +199,14 @@ Body integrity is protected by a `Content-Digest: sha-256=:<base64>:` header. Fo
 
 ## Extensibility
 
-The SDK delegates all environment-specific logic to three traits:
+The SDK delegates all environment-specific logic to pluggable traits:
 
-| Trait | Responsibility | Implementations |
+| Trait | Responsibility | Built-in |
 | --- | --- | --- |
-| [`Signer`][doc-url] | Produce EIP-191 `personal_sign` signatures. | Private key, HSM, KMS, MPC |
-| [`Verifier`][doc-url] | Verify signatures given `(address, message, signature)`. | `ecrecover`, ERC-1271, [ERC-6492][erc6492] |
-| [`NonceStore`][doc-url] | Atomically consume nonces for replay protection. | Redis, DashMap, RDBMS — or [`NoNonceStore`][doc-url] for replayable-only policies |
+| [`Signer`][doc-url] | Produce EIP-191 `personal_sign` signatures. | `EoaSigner` (k256), `AlloySigner` (alloy) |
+| [`Verifier`][doc-url] | Verify signatures: `(address, message, signature)`. | `EoaVerifier` (ecrecover) |
+| [`NonceStore`][doc-url] | Atomically consume nonces for replay protection. | `MemoryNonceStore`, `NoNonceStore` |
+| [`ReplayablePolicy`][doc-url] | Early invalidation hooks for replayable signatures (Section 5.2). | `RejectReplayable` |
 
 ## Related Standards
 

@@ -9,12 +9,17 @@
 //! ```ignore
 //! use erc8128::middleware::Erc8128Layer;
 //! use erc8128::eoa::EoaVerifier;
-//! use erc8128::{NoNonceStore, VerifyPolicy};
+//! use erc8128::{MemoryNonceStore, RejectReplayable, VerifyPolicy};
 //! use axum::{Router, routing::post, Extension};
 //!
 //! let app = Router::new()
 //!     .route("/api", post(handler))
-//!     .layer(Erc8128Layer::new(EoaVerifier, NoNonceStore, VerifyPolicy::default()));
+//!     .layer(Erc8128Layer::new(
+//!         EoaVerifier,
+//!         MemoryNonceStore::default(),
+//!         RejectReplayable,
+//!         VerifyPolicy::default(),
+//!     ));
 //!
 //! async fn handler(Extension(auth): Extension<erc8128::VerifySuccess>) -> &'static str {
 //!     "authenticated"
