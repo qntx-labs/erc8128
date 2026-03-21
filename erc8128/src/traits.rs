@@ -1,6 +1,8 @@
 //! Core traits for ERC-8128 signing and verification.
 
+use std::collections::HashSet;
 use std::future::Future;
+use std::sync::{Arc, Mutex};
 
 use crate::error::Erc8128Error;
 use crate::types::Address;
@@ -58,10 +60,28 @@ pub trait NonceStore: Send + Sync {
     fn consume(&self, key: &str, ttl_seconds: u64) -> impl Future<Output = bool> + Send;
 }
 
-/// No-op nonce store for replayable-only policies.
+/// In-memory nonce store for development and testing.
 ///
-/// Always returns `false` (rejects nonce consumption). Use this when
-/// your verification policy only allows replayable signatures.
+/// Thread-safe via `Arc<Mutex<_>>`. Nonces are never evicted.
+/// Use a TTL-aware store (Redis, `DashMap`, etc.) in production.
+#[derive(Debug, Clone, Default)]
+pub struct MemoryNonceStore {
+    seen: Arc<Mutex<HashSet<String>>>,
+}
+
+impl NonceStore for MemoryNonceStore {
+    async fn consume(&self, key: &str, _ttl_seconds: u64) -> bool {
+        self.seen
+            .lock()
+            .expect("lock poisoned")
+            .insert(key.to_owned())
+    }
+}
+
+/// No-op nonce store that rejects all nonces.
+///
+/// Always returns `false` (= replay). Use only with replayable-only
+/// policies where nonce consumption never occurs.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoNonceStore;
 

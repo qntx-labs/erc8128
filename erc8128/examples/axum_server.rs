@@ -7,27 +7,22 @@
 
 use axum::{Extension, Router, routing::post};
 use erc8128::{
-    NoNonceStore, VerifyPolicy, VerifySuccess, eoa::EoaVerifier, middleware::Erc8128Layer,
+    MemoryNonceStore, VerifyPolicy, VerifySuccess, eoa::EoaVerifier, middleware::Erc8128Layer,
 };
 
 async fn handler(Extension(auth): Extension<VerifySuccess>) -> String {
-    format!(
-        "Authenticated: address={} chain_id={}",
-        auth.address, auth.chain_id
-    )
+    format!("Authenticated: {} (chain {})", auth.address, auth.chain_id)
 }
 
 #[tokio::main]
 async fn main() {
-    // Allow replayable signatures since we have no nonce store in this example.
-    let policy = VerifyPolicy {
-        allow_replayable: true,
-        ..VerifyPolicy::default()
-    };
-
     let app = Router::new()
         .route("/api", post(handler))
-        .layer(Erc8128Layer::new(EoaVerifier, NoNonceStore, policy));
+        .layer(Erc8128Layer::new(
+            EoaVerifier,
+            MemoryNonceStore::default(),
+            VerifyPolicy::default(),
+        ));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
         .await

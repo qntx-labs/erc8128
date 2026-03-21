@@ -6,7 +6,7 @@
 //! ```
 
 use erc8128::{
-    NoNonceStore, Replay, Request, SignOptions, VerifyPolicy,
+    MemoryNonceStore, Request, SignOptions, VerifyPolicy,
     eoa::{EoaSigner, EoaVerifier},
     sign_request, verify_request,
 };
@@ -22,12 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         body: Some(b"{\"item\":\"widget\"}"),
     };
 
-    // Use Replayable mode since we have no nonce store in this example.
-    let opts = SignOptions {
-        replay: Replay::Replayable,
-        ..SignOptions::default()
-    };
-    let signed = sign_request(&request, &signer, &opts).await?;
+    let signed = sign_request(&request, &signer, &SignOptions::default()).await?;
 
     println!("Signature-Input: {}", signed.signature_input);
     println!("Signature:       {}", signed.signature);
@@ -46,12 +41,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         headers: &headers,
         ..request
     };
-
-    let policy = VerifyPolicy {
-        allow_replayable: true,
-        ..VerifyPolicy::default()
-    };
-    let result = verify_request(&verify_req, &EoaVerifier, &NoNonceStore, &policy).await?;
+    let nonces = MemoryNonceStore::default();
+    let result =
+        verify_request(&verify_req, &EoaVerifier, &nonces, &VerifyPolicy::default()).await?;
 
     println!(
         "\n✓ Verified: address={} chain_id={}",

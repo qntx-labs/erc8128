@@ -59,7 +59,7 @@ pub mod client;
 
 pub use error::Erc8128Error;
 pub use sign::sign_request;
-pub use traits::{NoNonceStore, NonceStore, Signer, Verifier};
+pub use traits::{MemoryNonceStore, NoNonceStore, NonceStore, Signer, Verifier};
 pub use types::{
     Address, Binding, ContentDigest, Replay, Request, SignOptions, SignatureParams, SignedHeaders,
     VerifyPolicy, VerifySuccess,

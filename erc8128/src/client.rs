@@ -1,32 +1,13 @@
 //! Reqwest client helpers for ERC-8128 signed requests.
 //!
-//! Enabled by the `reqwest` feature. Provides [`signed_fetch`] for
-//! sending authenticated HTTP requests in one call.
+//! Enabled by the `reqwest` feature.
 //!
-//! # Examples
-//!
-//! ```ignore
-//! use erc8128::client::signed_fetch;
-//! use erc8128::eoa::EoaSigner;
-//! use erc8128::SignOptions;
-//!
-//! let client = reqwest::Client::new();
-//! let signer = EoaSigner::from_slice(&key_bytes, 1)?;
-//!
-//! let response = signed_fetch(
-//!     &client,
-//!     reqwest::Method::POST,
-//!     "https://api.example.com/orders",
-//!     &[("content-type", "application/json")],
-//!     Some(b"{\"amount\":100}"),
-//!     &signer,
-//!     &SignOptions::default(),
-//! ).await?;
-//! ```
+//! - [`signed_fetch`] — sign and send in one call
+//! - [`RequestBuilderExt`] — apply pre-computed [`SignedHeaders`] to a builder
 
 use crate::error::Erc8128Error;
 use crate::traits::Signer;
-use crate::types::{Request, SignOptions};
+use crate::types::{Request, SignOptions, SignedHeaders};
 
 /// Error type for [`signed_fetch`].
 #[derive(Debug, thiserror::Error)]
@@ -39,10 +20,26 @@ pub enum SignedFetchError {
     Reqwest(#[from] reqwest::Error),
 }
 
-/// Send an ERC-8128 signed HTTP request.
-///
-/// Constructs the request, signs it, attaches `Signature-Input`,
-/// `Signature`, and (optionally) `Content-Digest` headers, then sends.
+/// Extension trait for applying [`SignedHeaders`] to a [`reqwest::RequestBuilder`].
+pub trait RequestBuilderExt {
+    /// Attach `Signature-Input`, `Signature`, and `Content-Digest` headers.
+    #[must_use]
+    fn signed_headers(self, signed: &SignedHeaders) -> Self;
+}
+
+impl RequestBuilderExt for reqwest::RequestBuilder {
+    fn signed_headers(self, signed: &SignedHeaders) -> Self {
+        let b = self
+            .header("signature-input", &signed.signature_input)
+            .header("signature", &signed.signature);
+        match &signed.content_digest {
+            Some(d) => b.header("content-digest", d),
+            None => b,
+        }
+    }
+}
+
+/// Sign and send an HTTP request in one call.
 ///
 /// # Errors
 ///
@@ -69,11 +66,7 @@ pub async fn signed_fetch(
     for &(name, value) in headers {
         builder = builder.header(name, value);
     }
-    builder = builder.header("signature-input", &signed.signature_input);
-    builder = builder.header("signature", &signed.signature);
-    if let Some(digest) = &signed.content_digest {
-        builder = builder.header("content-digest", digest);
-    }
+    builder = builder.signed_headers(&signed);
     if let Some(body) = body {
         builder = builder.body(body.to_vec());
     }

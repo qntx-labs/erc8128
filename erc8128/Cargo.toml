@@ -43,5 +43,9 @@ required-features = ["k256", "reqwest"]
 name = "axum_server"
 required-features = ["k256", "axum"]
 
+[[example]]
+name = "e2e"
+required-features = ["k256", "axum", "reqwest"]
+
 [lints]
 workspace = true
