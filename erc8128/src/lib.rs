@@ -3,7 +3,7 @@
 //! Rust implementation of [ERC-8128]: authenticate HTTP requests using
 //! HTTP Message Signatures ([RFC 9421]) with Ethereum accounts.
 //!
-//! The crate provides two core operations:
+//! Two core operations:
 //! - [`sign_request`] — sign an outgoing HTTP request
 //! - [`verify_request`] — verify an incoming signed HTTP request
 //!
@@ -23,7 +23,6 @@
 //!     body: None,
 //! };
 //! let signed = sign_request(&request, &signer, &SignOptions::default()).await?;
-//! // Attach signed.signature_input and signed.signature to your HTTP request.
 //! # Ok(())
 //! # }
 //! ```
@@ -58,8 +57,8 @@ pub struct NoNonceStore;
 
 /// An HTTP request to be signed or verified.
 ///
-/// This is a simple, framework-agnostic representation. Callers construct it
-/// from whatever HTTP library they use (reqwest, hyper, axum, etc.).
+/// Framework-agnostic, zero-copy representation. Construct from whatever
+/// HTTP library you use (reqwest, hyper, axum, etc.).
 #[derive(Debug, Clone, Copy)]
 pub struct Request<'a> {
     /// HTTP method (e.g. `"GET"`, `"POST"`).
@@ -126,10 +125,10 @@ pub struct SignatureParams {
 pub struct SignOptions {
     /// Signature label (default: `"eth"`).
     pub label: Option<String>,
-    /// Binding mode (default: [`Binding::RequestBound`]).
-    pub binding: Option<Binding>,
-    /// Replay mode (default: [`Replay::NonReplayable`]).
-    pub replay: Option<Replay>,
+    /// Binding mode.
+    pub binding: Binding,
+    /// Replay mode.
+    pub replay: Replay,
     /// Unix timestamp for `created` (default: now).
     pub created: Option<u64>,
     /// Unix timestamp for `expires` (default: `created + ttl_seconds`).
@@ -139,7 +138,7 @@ pub struct SignOptions {
     /// Explicit nonce value (default: auto-generated).
     pub nonce: Option<String>,
     /// Content-Digest handling mode.
-    pub content_digest: Option<ContentDigest>,
+    pub content_digest: ContentDigest,
     /// Override or extend the signed components.
     pub components: Option<Vec<String>>,
 }
@@ -156,10 +155,6 @@ pub struct SignedHeaders {
 }
 
 /// Ethereum message signer.
-///
-/// Implement this trait to provide signing capability. The simplest case
-/// wraps a local private key; more advanced implementations can use
-/// hardware wallets or KMS.
 ///
 /// `sign_message` receives the RFC 9421 signature base bytes. The
 /// implementation MUST apply EIP-191 `personal_sign` wrapping
@@ -228,6 +223,9 @@ pub struct VerifyPolicy {
     pub max_validity_sec: u64,
     /// Allowed clock drift in seconds (default: 0).
     pub clock_skew_sec: u64,
+    /// Maximum nonce retention window in seconds. Non-replayable signatures
+    /// with `expires - created` exceeding this are rejected. `None` disables.
+    pub max_nonce_window_sec: Option<u64>,
     /// Extra components required for request-bound signatures beyond the
     /// default set (`@authority`, `@method`, `@path`, `@query`, `content-digest`).
     pub additional_request_bound_components: Option<Vec<String>>,
@@ -247,6 +245,7 @@ impl Default for VerifyPolicy {
             allow_replayable: false,
             max_validity_sec: 300,
             clock_skew_sec: 0,
+            max_nonce_window_sec: None,
             additional_request_bound_components: None,
             class_bound_policies: None,
             now: None,

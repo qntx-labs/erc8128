@@ -5,7 +5,7 @@
 
 use std::fmt::Write;
 
-use crate::{Erc8128Error, SignatureParams};
+use crate::{Erc8128Error, SignatureParams, sign::validate_label};
 
 /// Quote a value as an sf-string: `"value"` with `\` and `"` escaped.
 ///
@@ -90,11 +90,12 @@ pub fn parse_signature_input_dictionary(
             .find('=')
             .filter(|&i| i > 0)
             .ok_or_else(|| Erc8128Error::BadSignatureInput("missing '='".into()))?;
-        let label = m[..eq].trim().to_owned();
+        let label = m[..eq].trim();
+        validate_label(label)?;
         let value = m[eq + 1..].trim().to_owned();
         let parsed = parse_inner_list_with_params(&value)?;
         result.push(ParsedSignatureInput {
-            label,
+            label: label.to_owned(),
             components: parsed.items,
             params: parsed.params,
             params_value: value,
@@ -121,10 +122,11 @@ pub fn parse_signature_dictionary(
             .find('=')
             .filter(|&i| i > 0)
             .ok_or_else(|| Erc8128Error::BadSignatureInput("missing '='".into()))?;
-        let label = m[..eq].trim().to_owned();
+        let label = m[..eq].trim();
+        validate_label(label)?;
         let value = m[eq + 1..].trim();
         let b64 = parse_sf_binary(value)?;
-        map.insert(label, b64);
+        map.insert(label.to_owned(), b64);
     }
     Ok(map)
 }

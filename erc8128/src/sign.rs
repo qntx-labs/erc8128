@@ -16,25 +16,6 @@ use crate::{
 ///
 /// Returns [`Erc8128Error`] if the request URL is invalid, options are
 /// inconsistent, or the signer produces an empty signature.
-///
-/// # Examples
-///
-/// ```
-/// use erc8128::{Request, SignOptions, sign_request};
-///
-/// # async fn example(signer: impl erc8128::Signer) -> Result<(), erc8128::Erc8128Error> {
-/// let request = Request {
-///     method: "POST",
-///     url: "https://api.example.com/orders",
-///     headers: &[("content-type", "application/json")],
-///     body: Some(b"{\"amount\":\"100\"}"),
-/// };
-/// let headers = sign_request(&request, &signer, &SignOptions::default()).await?;
-/// // Attach headers.signature_input, headers.signature, headers.content_digest
-/// // to your HTTP request.
-/// # Ok(())
-/// # }
-/// ```
 pub async fn sign_request(
     request: &Request<'_>,
     signer: &impl crate::Signer,
@@ -43,10 +24,6 @@ pub async fn sign_request(
     let url = parse_url(request.url)?;
     let label = opts.label.as_deref().unwrap_or("eth");
     validate_label(label)?;
-
-    let binding = opts.binding.unwrap_or(Binding::RequestBound);
-    let replay = opts.replay.unwrap_or(Replay::NonReplayable);
-    let digest_mode = opts.content_digest.unwrap_or_default();
 
     let now = now_unix();
     let created = opts.created.unwrap_or(now);
@@ -59,7 +36,7 @@ pub async fn sign_request(
         ));
     }
 
-    let nonce = match replay {
+    let nonce = match opts.replay {
         Replay::NonReplayable => Some(
             opts.nonce
                 .clone()
@@ -69,24 +46,23 @@ pub async fn sign_request(
     };
 
     let keyid = format_keyid(signer.chain_id(), signer.address());
-
     let has_query = !url.query.is_empty();
     let has_body = request.body.is_some();
 
-    let mut components =
-        resolve_components(binding, has_query, has_body, opts.components.as_deref())?;
+    let mut components = resolve_components(
+        opts.binding,
+        has_query,
+        has_body,
+        opts.components.as_deref(),
+    )?;
 
-    // Content-Digest handling
-    let content_digest_value = if components.contains(&"content-digest".to_owned())
-        || (binding == Binding::RequestBound && has_body)
-    {
-        if !components.contains(&"content-digest".to_owned()) {
-            components.push("content-digest".to_owned());
-        }
-        Some(compute_content_digest(request, digest_mode)?)
-    } else {
-        None
-    };
+    let content_digest_value = resolve_content_digest(
+        request,
+        opts.binding,
+        has_body,
+        opts.content_digest,
+        &mut components,
+    )?;
 
     let params = crate::SignatureParams {
         created,
@@ -107,7 +83,6 @@ pub async fn sign_request(
     )?;
 
     let sig_bytes = signer.sign_message(&signature_base).await?;
-
     if sig_bytes.is_empty() {
         return Err(Erc8128Error::SigningFailed(
             "signer returned empty signature".into(),
@@ -115,17 +90,32 @@ pub async fn sign_request(
     }
 
     let sig_b64 = BASE64.encode(&sig_bytes);
-    let signature_input = format!("{label}={params_value}");
-    let signature = format!("{label}=:{sig_b64}:");
 
     Ok(SignedHeaders {
-        signature_input,
-        signature,
+        signature_input: format!("{label}={params_value}"),
+        signature: format!("{label}=:{sig_b64}:"),
         content_digest: content_digest_value.map(|v| format!("sha-256=:{v}:")),
     })
 }
 
-// ── Internal helpers ────────────────────────────────────────────────
+fn resolve_content_digest(
+    request: &Request<'_>,
+    binding: Binding,
+    has_body: bool,
+    digest_mode: ContentDigest,
+    components: &mut Vec<String>,
+) -> Result<Option<String>, Erc8128Error> {
+    let needs_digest =
+        has_str(components, "content-digest") || (binding == Binding::RequestBound && has_body);
+
+    if !needs_digest {
+        return Ok(None);
+    }
+    if !has_str(components, "content-digest") {
+        components.push("content-digest".into());
+    }
+    compute_content_digest(request, digest_mode).map(Some)
+}
 
 pub struct ParsedUrl {
     pub authority: String,
@@ -134,16 +124,14 @@ pub struct ParsedUrl {
 }
 
 pub fn parse_url(url: &str) -> Result<ParsedUrl, Erc8128Error> {
-    // Minimal URL parser: extract scheme, authority, path, query.
-    let rest = url
-        .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"))
-        .ok_or_else(|| Erc8128Error::InvalidUrl("must be absolute http(s) URL".into()))?;
-
-    let scheme = if url.starts_with("https://") {
-        "https"
+    let (scheme, rest) = if let Some(r) = url.strip_prefix("https://") {
+        ("https", r)
+    } else if let Some(r) = url.strip_prefix("http://") {
+        ("http", r)
     } else {
-        "http"
+        return Err(Erc8128Error::InvalidUrl(
+            "must be absolute http(s) URL".into(),
+        ));
     };
 
     let (authority_and_path, query) = rest
@@ -156,11 +144,8 @@ pub fn parse_url(url: &str) -> Result<ParsedUrl, Erc8128Error> {
             (&authority_and_path[..i], &authority_and_path[i..])
         });
 
-    // Normalize authority: lowercase hostname, strip default port
-    let authority = normalize_authority(scheme, authority_raw);
-
     Ok(ParsedUrl {
-        authority,
+        authority: normalize_authority(scheme, authority_raw),
         path: path.to_owned(),
         query: query.to_owned(),
     })
@@ -191,26 +176,25 @@ fn resolve_components(
 ) -> Result<Vec<String>, Erc8128Error> {
     match binding {
         Binding::RequestBound => {
-            let mut base = vec![
-                "@authority".to_owned(),
-                "@method".to_owned(),
-                "@path".to_owned(),
-            ];
+            let mut out: Vec<String> = ["@authority", "@method", "@path"]
+                .iter()
+                .map(|&s| s.into())
+                .collect();
             if has_query {
-                base.push("@query".to_owned());
+                out.push("@query".into());
             }
             if has_body {
-                base.push("content-digest".to_owned());
+                out.push("content-digest".into());
             }
             if let Some(extra) = provided {
                 for c in extra {
-                    let c = c.trim().to_owned();
-                    if !c.is_empty() && !base.contains(&c) {
-                        base.push(c);
+                    let c = c.trim();
+                    if !c.is_empty() && !has_str(&out, c) {
+                        out.push(c.to_owned());
                     }
                 }
             }
-            Ok(base)
+            Ok(out)
         }
         Binding::ClassBound => {
             let Some(provided) = provided else {
@@ -218,17 +202,21 @@ fn resolve_components(
                     "components are required for class-bound signatures".into(),
                 ));
             };
-            let mut components: Vec<String> = provided
+            let mut out: Vec<String> = provided
                 .iter()
                 .map(|c| c.trim().to_owned())
                 .filter(|c| !c.is_empty())
                 .collect();
-            if !components.contains(&"@authority".to_owned()) {
-                components.insert(0, "@authority".to_owned());
+            if !has_str(&out, "@authority") {
+                out.insert(0, "@authority".into());
             }
-            Ok(components)
+            Ok(out)
         }
     }
+}
+
+fn has_str(haystack: &[String], needle: &str) -> bool {
+    haystack.iter().any(|s| s == needle)
 }
 
 fn compute_content_digest(
@@ -237,39 +225,31 @@ fn compute_content_digest(
 ) -> Result<String, Erc8128Error> {
     match mode {
         ContentDigest::Off => Err(Erc8128Error::DigestError(
-            "content-digest required by components, but mode is Off".into(),
+            "content-digest required but mode is Off".into(),
         )),
-        ContentDigest::Require => {
-            // Check if caller already provided it in headers
-            for &(name, value) in request.headers {
-                if name.eq_ignore_ascii_case("content-digest") {
-                    return parse_digest_b64(value);
-                }
-            }
-            Err(Erc8128Error::DigestError(
-                "content-digest required but missing from request headers".into(),
-            ))
-        }
-        ContentDigest::Auto => {
-            // Use existing header if present, otherwise compute
-            for &(name, value) in request.headers {
-                if name.eq_ignore_ascii_case("content-digest") {
-                    return parse_digest_b64(value);
-                }
-            }
-            Ok(compute_sha256(request.body.unwrap_or_default()))
-        }
+        ContentDigest::Require => find_header_digest(request).ok_or_else(|| {
+            Erc8128Error::DigestError("content-digest required but missing from headers".into())
+        }),
+        ContentDigest::Auto => Ok(find_header_digest(request)
+            .unwrap_or_else(|| compute_sha256(request.body.unwrap_or_default()))),
         ContentDigest::Recompute => Ok(compute_sha256(request.body.unwrap_or_default())),
     }
 }
 
+fn find_header_digest(request: &Request<'_>) -> Option<String> {
+    for &(name, value) in request.headers {
+        if name.eq_ignore_ascii_case("content-digest") {
+            return parse_digest_b64(value).ok();
+        }
+    }
+    None
+}
+
 fn compute_sha256(body: &[u8]) -> String {
-    let hash = Sha256::digest(body);
-    BASE64.encode(hash)
+    BASE64.encode(Sha256::digest(body))
 }
 
 fn parse_digest_b64(header_value: &str) -> Result<String, Erc8128Error> {
-    // Parse `sha-256=:<base64>:` format
     let s = header_value.trim();
     let rest = s
         .strip_prefix("sha-256=:")
@@ -280,14 +260,14 @@ fn parse_digest_b64(header_value: &str) -> Result<String, Erc8128Error> {
     Ok(b64.to_owned())
 }
 
-fn build_signature_base(
+pub fn build_signature_base(
     request: &Request<'_>,
     url: &ParsedUrl,
     components: &[String],
     signature_params_value: &str,
     content_digest_b64: Option<&str>,
 ) -> Result<Vec<u8>, Erc8128Error> {
-    let mut lines = Vec::new();
+    let mut lines = Vec::with_capacity(components.len() + 1);
 
     for comp in components {
         let value = component_value(request, url, comp, content_digest_b64)?;
@@ -295,18 +275,12 @@ fn build_signature_base(
         lines.push(format!("{}: {value}", quote_sf_string(comp)?));
     }
 
-    let sig_params_line = format!(
+    lines.push(format!(
         "{}: {signature_params_value}",
         quote_sf_string("@signature-params")?
-    );
+    ));
 
-    let base = if lines.is_empty() {
-        sig_params_line
-    } else {
-        format!("{}\n{sig_params_line}", lines.join("\n"))
-    };
-
-    Ok(base.into_bytes())
+    Ok(lines.join("\n").into_bytes())
 }
 
 pub fn component_value(
@@ -318,37 +292,31 @@ pub fn component_value(
     match component {
         "@method" => Ok(request.method.to_ascii_uppercase()),
         "@authority" => Ok(url.authority.clone()),
-        "@path" => {
-            let p = if url.path.is_empty() { "/" } else { &url.path };
-            Ok(p.to_owned())
-        }
+        "@path" => Ok(if url.path.is_empty() {
+            "/".to_owned()
+        } else {
+            url.path.clone()
+        }),
         "@query" => Ok(url.query.clone()),
         "content-digest" => {
             if let Some(b64) = content_digest_b64 {
                 return Ok(format!("sha-256=:{b64}:"));
             }
-            // Try from request headers
-            for &(name, value) in request.headers {
-                if name.eq_ignore_ascii_case("content-digest") {
-                    return Ok(canonicalize_field_value(value));
-                }
-            }
-            Err(Erc8128Error::InvalidHeaderValue(
-                "required header \"content-digest\" is missing".into(),
-            ))
+            find_header_value(request, "content-digest")
         }
-        _ => {
-            // Regular header field
-            for &(name, value) in request.headers {
-                if name.eq_ignore_ascii_case(component) {
-                    return Ok(canonicalize_field_value(value));
-                }
-            }
-            Err(Erc8128Error::InvalidHeaderValue(format!(
-                "required header \"{component}\" is missing"
-            )))
+        _ => find_header_value(request, component),
+    }
+}
+
+fn find_header_value(request: &Request<'_>, name: &str) -> Result<String, Erc8128Error> {
+    for &(n, v) in request.headers {
+        if n.eq_ignore_ascii_case(name) {
+            return Ok(canonicalize_field_value(v));
         }
     }
+    Err(Erc8128Error::InvalidHeaderValue(format!(
+        "required header \"{name}\" is missing"
+    )))
 }
 
 fn canonicalize_field_value(v: &str) -> String {
@@ -359,34 +327,29 @@ fn canonicalize_field_value(v: &str) -> String {
 }
 
 pub fn ensure_visible_ascii(value: &str, name: &str) -> Result<(), Erc8128Error> {
-    for b in value.bytes() {
-        if !(0x20..=0x7E).contains(&b) {
-            return Err(Erc8128Error::InvalidDerivedValue(format!(
-                "{name} produced non-visible-ASCII character"
-            )));
-        }
+    if value.bytes().all(|b| (0x20..=0x7E).contains(&b)) {
+        Ok(())
+    } else {
+        Err(Erc8128Error::InvalidDerivedValue(format!(
+            "{name} produced non-visible-ASCII character"
+        )))
     }
-    Ok(())
 }
 
 pub fn validate_label(label: &str) -> Result<(), Erc8128Error> {
-    if label.is_empty() {
-        return Err(Erc8128Error::InvalidFormat("empty label".into()));
-    }
     let bytes = label.as_bytes();
-    if !bytes[0].is_ascii_lowercase() {
-        return Err(Erc8128Error::InvalidFormat(format!(
+    let valid = !bytes.is_empty()
+        && bytes[0].is_ascii_lowercase()
+        && bytes.iter().all(|&b| {
+            b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'_' | b'-' | b'.')
+        });
+    if valid {
+        Ok(())
+    } else {
+        Err(Erc8128Error::InvalidFormat(format!(
             "invalid label: {label}"
-        )));
+        )))
     }
-    if !bytes.iter().all(|&b| {
-        b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-' || b == b'.'
-    }) {
-        return Err(Erc8128Error::InvalidFormat(format!(
-            "invalid label: {label}"
-        )));
-    }
-    Ok(())
 }
 
 pub fn now_unix() -> u64 {

@@ -41,10 +41,6 @@ This crate is **framework-agnostic** (zero HTTP framework dependencies) and expo
 
 Chain-specific verification logic is pluggable via the [`Verifier`][doc-url] trait.
 
-> [!NOTE]
-> Reference implementation: **[erc8128/erc8128-ts](https://github.com/erc8128/erc8128)** (TypeScript).
-> See [SECURITY.md](SECURITY.md) before production use.
-
 ## Quick Start
 
 ### Sign (Client)

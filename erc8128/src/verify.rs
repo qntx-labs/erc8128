@@ -6,7 +6,7 @@ use crate::{
     Binding, Erc8128Error, NonceStore, Request, SignatureParams, Verifier, VerifyPolicy,
     VerifySuccess,
     keyid::parse_keyid,
-    sf::{parse_signature_dictionary, parse_signature_input_dictionary, quote_sf_string},
+    sf::{parse_signature_dictionary, parse_signature_input_dictionary},
     sign,
 };
 
@@ -31,9 +31,7 @@ pub async fn verify_request(
     let parsed_inputs = parse_signature_input_dictionary(sig_input_raw)?;
     let parsed_sigs = parse_signature_dictionary(sig_raw)?;
 
-    let strict_label = policy.strict_label;
     let mut candidates: Vec<Candidate> = Vec::new();
-
     for input in &parsed_inputs {
         if let Some(sig_b64) = parsed_sigs.get(&input.label) {
             candidates.push(Candidate {
@@ -51,7 +49,7 @@ pub async fn verify_request(
     }
 
     if let Some(pref) = policy.label.as_deref()
-        && strict_label
+        && policy.strict_label
     {
         candidates.retain(|c| c.label == pref);
         if candidates.is_empty() {
@@ -64,12 +62,11 @@ pub async fn verify_request(
     let has_body = request.body.is_some();
     let now = policy.now.unwrap_or_else(sign::now_unix);
     let max_verifications = policy.max_signature_verifications.unwrap_or(3);
-    let extra_components = policy
+    let extras = policy
         .additional_request_bound_components
         .as_deref()
         .unwrap_or_default();
-    let request_bound_required =
-        required_request_bound_components(has_query, has_body, extra_components);
+    let rb_required = required_request_bound(has_query, has_body, extras);
 
     let mut last_err = Erc8128Error::BadSignature;
 
@@ -85,13 +82,11 @@ pub async fn verify_request(
 
         let replayable = candidate.params.nonce.is_none();
 
-        let binding = classify_binding(
+        let Some(binding) = classify_binding(
             &candidate.components,
-            &request_bound_required,
+            &rb_required,
             policy.class_bound_policies.as_ref(),
-        );
-
-        let Some(binding) = binding else {
+        ) else {
             last_err = if policy.class_bound_policies.is_some() {
                 Erc8128Error::ClassBoundNotAllowed
             } else {
@@ -116,6 +111,13 @@ pub async fn verify_request(
             continue;
         }
 
+        if !replayable
+            && let Some(max_window) = policy.max_nonce_window_sec
+                && candidate.params.expires - candidate.params.created > max_window {
+                    last_err = Erc8128Error::NonceWindowTooLong;
+                    continue;
+                }
+
         if candidate.components.iter().any(|c| c == "content-digest")
             && let Err(e) = verify_content_digest(request)
         {
@@ -123,11 +125,12 @@ pub async fn verify_request(
             continue;
         }
 
-        let signature_base = build_verify_signature_base(
+        let signature_base = sign::build_signature_base(
             request,
             &url,
             &candidate.components,
             &candidate.params_value,
+            None,
         )?;
 
         let sig_bytes = BASE64
@@ -184,57 +187,46 @@ fn find_header<'a>(request: &'a Request<'_>, name: &str) -> Option<&'a str> {
         .map(|(_, v)| *v)
 }
 
-fn required_request_bound_components(
-    has_query: bool,
-    has_body: bool,
-    extras: &[String],
-) -> Vec<String> {
-    let mut c = vec![
-        "@authority".to_owned(),
-        "@method".to_owned(),
-        "@path".to_owned(),
-    ];
+fn required_request_bound(has_query: bool, has_body: bool, extras: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = ["@authority", "@method", "@path"]
+        .iter()
+        .map(|&s| s.into())
+        .collect();
     if has_query {
-        c.push("@query".to_owned());
+        out.push("@query".into());
     }
     if has_body {
-        c.push("content-digest".to_owned());
+        out.push("content-digest".into());
     }
     for extra in extras {
-        let e = extra.trim().to_owned();
-        if !e.is_empty() && !c.iter().any(|x| x == &e) {
-            c.push(e);
+        let e = extra.trim();
+        if !e.is_empty() && !out.iter().any(|x| x == e) {
+            out.push(e.to_owned());
         }
     }
-    c
+    out
 }
 
 fn classify_binding(
     signed: &[String],
-    request_bound_required: &[String],
+    rb_required: &[String],
     class_bound_policies: Option<&Vec<Vec<String>>>,
 ) -> Option<Binding> {
-    if includes_all(request_bound_required, signed) {
+    if rb_required.iter().all(|r| signed.iter().any(|s| s == r)) {
         return Some(Binding::RequestBound);
     }
 
     if let Some(policies) = class_bound_policies {
         for policy in policies {
-            let mut required = policy.clone();
-            if !required.contains(&"@authority".to_owned()) {
-                required.insert(0, "@authority".to_owned());
-            }
-            if includes_all(&required, signed) {
+            let authority_ok = signed.iter().any(|s| s == "@authority");
+            let policy_ok = policy.iter().all(|r| signed.iter().any(|s| s == r));
+            if authority_ok && policy_ok {
                 return Some(Binding::ClassBound);
             }
         }
     }
 
     None
-}
-
-fn includes_all(required: &[String], have: &[String]) -> bool {
-    required.iter().all(|r| have.contains(r))
 }
 
 const fn check_time(
@@ -269,41 +261,11 @@ fn verify_content_digest(request: &Request<'_>) -> Result<(), Erc8128Error> {
     let claimed_b64 = rest.strip_suffix(':').ok_or(Erc8128Error::DigestMismatch)?;
 
     let body = request.body.unwrap_or_default();
-    let actual_hash = Sha256::digest(body);
-    let actual_b64 = BASE64.encode(actual_hash);
+    let actual_b64 = BASE64.encode(Sha256::digest(body));
 
-    let eq = claimed_b64.as_bytes().ct_eq(actual_b64.as_bytes());
-    if bool::from(eq) {
+    if bool::from(claimed_b64.as_bytes().ct_eq(actual_b64.as_bytes())) {
         Ok(())
     } else {
         Err(Erc8128Error::DigestMismatch)
     }
-}
-
-fn build_verify_signature_base(
-    request: &Request<'_>,
-    url: &sign::ParsedUrl,
-    components: &[String],
-    signature_params_value: &str,
-) -> Result<Vec<u8>, Erc8128Error> {
-    let mut lines = Vec::new();
-
-    for comp in components {
-        let value = sign::component_value(request, url, comp, None)?;
-        sign::ensure_visible_ascii(&value, comp)?;
-        lines.push(format!("{}: {value}", quote_sf_string(comp)?));
-    }
-
-    let sig_params_line = format!(
-        "{}: {signature_params_value}",
-        quote_sf_string("@signature-params")?
-    );
-
-    let base = if lines.is_empty() {
-        sig_params_line
-    } else {
-        format!("{}\n{sig_params_line}", lines.join("\n"))
-    };
-
-    Ok(base.into_bytes())
 }
