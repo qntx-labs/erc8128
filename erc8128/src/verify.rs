@@ -113,10 +113,11 @@ pub async fn verify_request(
 
         if !replayable
             && let Some(max_window) = policy.max_nonce_window_sec
-                && candidate.params.expires - candidate.params.created > max_window {
-                    last_err = Erc8128Error::NonceWindowTooLong;
-                    continue;
-                }
+            && candidate.params.expires - candidate.params.created > max_window
+        {
+            last_err = Erc8128Error::NonceWindowTooLong;
+            continue;
+        }
 
         if candidate.components.iter().any(|c| c == "content-digest")
             && let Err(e) = verify_content_digest(request)
