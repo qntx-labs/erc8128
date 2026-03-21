@@ -16,7 +16,7 @@
 //! # }
 //! ```
 
-use alloy_primitives::{Address, keccak256};
+use alloy_primitives::{Address, eip191_hash_message, keccak256};
 use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::{RecoveryId, Signature, SigningKey, VerifyingKey};
 
@@ -75,10 +75,10 @@ impl crate::traits::Signer for EoaSigner {
     }
 
     async fn sign_message(&self, message: &[u8]) -> Result<Vec<u8>, Erc8128Error> {
-        let hash = eip191_hash(message);
+        let hash = eip191_hash_message(message);
         let (sig, recid): (Signature, RecoveryId) = self
             .key
-            .sign_prehash(&hash)
+            .sign_prehash(hash.as_slice())
             .map_err(|e| Erc8128Error::SigningFailed(e.to_string()))?;
 
         let mut out = Vec::with_capacity(65);
@@ -106,14 +106,14 @@ impl crate::traits::Verifier for EoaVerifier {
             return Err(Erc8128Error::BadSignature);
         }
 
-        let hash = eip191_hash(message);
+        let hash = eip191_hash_message(message);
 
         let v = signature[64];
         let recid = RecoveryId::from_byte(v.wrapping_sub(27)).ok_or(Erc8128Error::BadSignature)?;
         let sig =
             Signature::from_slice(&signature[..64]).map_err(|_| Erc8128Error::BadSignature)?;
 
-        let recovered = VerifyingKey::recover_from_prehash(&hash, &sig, recid)
+        let recovered = VerifyingKey::recover_from_prehash(hash.as_slice(), &sig, recid)
             .map_err(|_| Erc8128Error::BadSignature)?;
 
         let recovered_addr = pubkey_to_address(&recovered);
@@ -123,14 +123,6 @@ impl crate::traits::Verifier for EoaVerifier {
 
         Ok(())
     }
-}
-
-fn eip191_hash(message: &[u8]) -> [u8; 32] {
-    let prefix = format!("\x19Ethereum Signed Message:\n{}", message.len());
-    let mut data = Vec::with_capacity(prefix.len() + message.len());
-    data.extend_from_slice(prefix.as_bytes());
-    data.extend_from_slice(message);
-    keccak256(&data).into()
 }
 
 fn pubkey_to_address(key: &VerifyingKey) -> Address {
