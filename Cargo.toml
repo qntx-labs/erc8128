@@ -11,6 +11,12 @@ repository = "https://github.com/qntx/erc8128"
 description = "Signed HTTP Requests with Ethereum."
 
 [workspace.dependencies]
+alloy-primitives = "1"
+base64 = "0.22"
+rand = "0.10"
+sha2 = "0.10"
+subtle = "2"
+thiserror = "2"
 
 [profile.release]
 codegen-units = 1
