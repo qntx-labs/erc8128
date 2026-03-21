@@ -94,12 +94,21 @@ impl NonceStore for NoNonceStore {
 /// Policy for replayable (nonce-less) signature acceptance and invalidation.
 ///
 /// Required by ERC-8128 Section 3.2.2 + 5.2: verifiers that accept
-/// replayable signatures **MUST** implement early invalidation mechanisms.
+/// replayable signatures **MUST** implement at least one early invalidation
+/// mechanism ([`not_before`](Self::not_before) or [`invalidated`](Self::invalidated)).
 ///
 /// Use [`RejectReplayable`] (default) to reject all replayable signatures.
 pub trait ReplayablePolicy: Send + Sync {
     /// Whether to accept replayable (nonce-less) signatures.
     fn allow(&self) -> bool;
+
+    /// Whether at least one invalidation mechanism is implemented.
+    ///
+    /// Must return `true` if [`not_before`](Self::not_before) or
+    /// [`invalidated`](Self::invalidated) performs real checks.
+    /// When `false` and [`allow`](Self::allow) is `true`, verification
+    /// fails with [`ReplayableInvalidationRequired`](crate::Erc8128Error::ReplayableInvalidationRequired).
+    fn has_invalidation(&self) -> bool;
 
     /// Return a `not_before` timestamp for the given `keyid`.
     /// Signatures with `created < not_before` are rejected.
@@ -117,6 +126,10 @@ pub struct RejectReplayable;
 
 impl ReplayablePolicy for RejectReplayable {
     fn allow(&self) -> bool {
+        false
+    }
+
+    fn has_invalidation(&self) -> bool {
         false
     }
 

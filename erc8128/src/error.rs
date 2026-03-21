@@ -72,6 +72,11 @@ pub enum Erc8128Error {
     #[error("replayable not allowed")]
     ReplayableNotAllowed,
 
+    /// Replayable signature accepted but no invalidation mechanism is provided.
+    /// Required by ERC-8128 Section 3.2.2 + 5.2.
+    #[error("replayable invalidation required")]
+    ReplayableInvalidationRequired,
+
     /// Replayable signature rejected: `created` before the per-key `not_before` cutoff.
     #[error("replayable not before")]
     ReplayableNotBefore,

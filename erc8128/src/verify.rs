@@ -116,7 +116,11 @@ pub async fn verify_request(
         // Replayable checks (Section 3.2.2 + 5.2)
         if replayable {
             if !replayable_policy.allow() {
-                last_err = Erc8128Error::NonceRequired;
+                last_err = Erc8128Error::ReplayableNotAllowed;
+                continue;
+            }
+            if !replayable_policy.has_invalidation() {
+                last_err = Erc8128Error::ReplayableInvalidationRequired;
                 continue;
             }
             if let Some(not_before) = replayable_policy.not_before(&candidate.params.keyid).await
