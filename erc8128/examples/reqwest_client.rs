@@ -5,12 +5,18 @@
 //! cargo run --example reqwest_client --features k256,reqwest
 //! ```
 
-use erc8128::{SignOptions, client::signed_fetch, eoa::EoaSigner};
+use erc8128::{Replay, SignOptions, client::signed_fetch, eoa::EoaSigner};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let signer = EoaSigner::from_slice(&[0xAB; 32], 1)?;
     let client = reqwest::Client::new();
+
+    // Use Replayable mode for this demo (no server-side nonce store).
+    let opts = SignOptions {
+        replay: Replay::Replayable,
+        ..SignOptions::default()
+    };
 
     let response = signed_fetch(
         &client,
@@ -19,7 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &[],
         None,
         &signer,
-        &SignOptions::default(),
+        &opts,
     )
     .await?;
 

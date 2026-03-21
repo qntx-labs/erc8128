@@ -19,13 +19,15 @@ async fn handler(Extension(auth): Extension<VerifySuccess>) -> String {
 
 #[tokio::main]
 async fn main() {
+    // Allow replayable signatures since we have no nonce store in this example.
+    let policy = VerifyPolicy {
+        allow_replayable: true,
+        ..VerifyPolicy::default()
+    };
+
     let app = Router::new()
         .route("/api", post(handler))
-        .layer(Erc8128Layer::new(
-            EoaVerifier,
-            NoNonceStore,
-            VerifyPolicy::default(),
-        ));
+        .layer(Erc8128Layer::new(EoaVerifier, NoNonceStore, policy));
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
         .await
