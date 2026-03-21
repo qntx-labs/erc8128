@@ -26,53 +26,91 @@
 Type-safe Rust SDK for [ERC-8128][spec]: HTTP request authentication via
 [RFC 9421][rfc9421] message signatures with Ethereum accounts (EOA & ERC-1271).
 
-[Quick Start](#quick-start) | [Protocol](#erc-8128-protocol) | [API Reference][doc-url]
+[Quick Start](#quick-start) | [Features](#feature-flags) | [Protocol](#erc-8128-protocol) | [API Reference][doc-url]
 
 </div>
 
-## Overview
-
-[ERC-8128][spec] binds [RFC 9421 HTTP Message Signatures][rfc9421] to Ethereum's signing ecosystem. A client signs each outgoing HTTP request with its Ethereum key; the server reconstructs the signature base and verifies it — either by `ecrecover` (EOA / [EIP-191][eip191]) or on-chain validation ([ERC-1271][erc1271]).
-
-This crate is **framework-agnostic** (zero HTTP framework dependencies) and exposes two entry points:
-
-- **[`sign_request`][doc-url]** — produce `Signature-Input`, `Signature`, and `Content-Digest` headers.
-- **[`verify_request`][doc-url]** — parse, verify, and authenticate an incoming signed request.
-
-Chain-specific verification logic is pluggable via the [`Verifier`][doc-url] trait.
-
 ## Quick Start
 
-### Sign (Client)
+```toml
+[dependencies]
+erc8128 = { version = "0.2", features = ["k256"] }
+```
+
+### Sign & Verify (in-memory roundtrip)
 
 ```rust
-use erc8128::{Request, SignOptions, sign_request};
+use erc8128::{
+    NoNonceStore, Request, SignOptions, VerifyPolicy,
+    eoa::{EoaSigner, EoaVerifier},
+    sign_request, verify_request,
+};
+
+let signer = EoaSigner::from_slice(&private_key_bytes, 1)?;
 
 let request = Request {
     method: "POST",
     url: "https://api.example.com/orders",
     headers: &[("content-type", "application/json")],
-    body: Some(b"{\"item\":\"widget\",\"qty\":1}"),
+    body: Some(b"{\"item\":\"widget\"}"),
 };
 
+// Sign
 let signed = sign_request(&request, &signer, &SignOptions::default()).await?;
 
-// Attach to your HTTP client:
-//   Signature-Input: signed.signature_input
-//   Signature:       signed.signature
-//   Content-Digest:  signed.content_digest  (Some when body is present)
+// Verify (attach signature headers to request first)
+let result = verify_request(&req, &EoaVerifier, &NoNonceStore, &VerifyPolicy::default()).await?;
+println!("Authenticated: {} on chain {}", result.address, result.chain_id);
 ```
 
-### Verify (Server)
+### reqwest Client
+
+```toml
+erc8128 = { version = "0.2", features = ["k256", "reqwest"] }
+```
 
 ```rust
-use erc8128::{Request, VerifyPolicy, NoNonceStore, verify_request};
+use erc8128::{SignOptions, client::signed_fetch, eoa::EoaSigner};
 
-let result = verify_request(&request, &verifier, &nonce_store, &VerifyPolicy::default()).await?;
-
-assert_eq!(result.address, expected_address);
-println!("chain={} binding={:?} replayable={}", result.chain_id, result.binding, result.replayable);
+let signer = EoaSigner::from_slice(&key, 1)?;
+let resp = signed_fetch(
+    &reqwest::Client::new(),
+    reqwest::Method::POST, "https://api.example.com/orders",
+    &[("content-type", "application/json")],
+    Some(b"{\"item\":\"widget\"}"),
+    &signer, &SignOptions::default(),
+).await?;
 ```
+
+### axum Server
+
+```toml
+erc8128 = { version = "0.2", features = ["k256", "axum"] }
+```
+
+```rust
+use axum::{Router, routing::post, Extension};
+use erc8128::{NoNonceStore, VerifyPolicy, VerifySuccess, eoa::EoaVerifier, middleware::Erc8128Layer};
+
+let app = Router::new()
+    .route("/api", post(handler))
+    .layer(Erc8128Layer::new(EoaVerifier, NoNonceStore, VerifyPolicy::default()));
+
+async fn handler(Extension(auth): Extension<VerifySuccess>) -> String {
+    format!("Hello, {}!", auth.address)
+}
+```
+
+## Feature Flags
+
+| Feature | Dependencies | Provides |
+| --- | --- | --- |
+| `k256` | `k256` | `eoa::EoaSigner` + `eoa::EoaVerifier` — out-of-the-box EOA signing & verification |
+| `alloy` | `alloy-signer` | `alloy::AlloySigner<S>` — adapter for any `alloy_signer::Signer` implementation |
+| `axum` | `axum`, `tower` | `middleware::Erc8128Layer` — Tower middleware for automatic request verification |
+| `reqwest` | `reqwest` | `client::signed_fetch` — one-call signed HTTP requests |
+
+The core crate (`sign_request`, `verify_request`, traits) has **zero** HTTP framework dependencies.
 
 ## ERC-8128 Protocol
 

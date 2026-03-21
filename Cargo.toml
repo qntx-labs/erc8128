@@ -12,11 +12,18 @@ description = "Signed HTTP Requests with Ethereum."
 
 [workspace.dependencies]
 alloy-primitives = "1"
+alloy-signer = "1"
+axum = "0.8"
 base64 = "0.22"
+http-body-util = "0.1"
+k256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
 rand = "0.10"
+reqwest = { version = "0.13", default-features = false }
 sha2 = "0.10"
 subtle = "2"
 thiserror = "2"
+tokio = { version = "1", default-features = false }
+tower = "0.5"
 
 [profile.release]
 codegen-units = 1

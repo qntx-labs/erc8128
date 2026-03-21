@@ -21,15 +21,27 @@ sha2.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
 
-k256 = { version = "0.13", default-features = false, features = ["ecdsa"], optional = true }
-alloy-signer = { version = "1", optional = true }
-axum = { version = "0.8", optional = true }
-http-body-util = { version = "0.1", optional = true }
-tower = { version = "0.5", optional = true }
-reqwest = { version = "0.12", default-features = false, optional = true }
+k256 = { workspace = true, optional = true }
+alloy-signer = { workspace = true, optional = true }
+axum = { workspace = true, optional = true }
+http-body-util = { workspace = true, optional = true }
+tower = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "net"] }
+
+[[example]]
+name = "roundtrip"
+required-features = ["k256"]
+
+[[example]]
+name = "reqwest_client"
+required-features = ["k256", "reqwest"]
+
+[[example]]
+name = "axum_server"
+required-features = ["k256", "axum"]
 
 [lints]
 workspace = true
