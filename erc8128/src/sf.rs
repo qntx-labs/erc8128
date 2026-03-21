@@ -5,7 +5,7 @@
 
 use std::fmt::Write;
 
-use crate::{Erc8128Error, SignatureParams, sign::validate_label};
+use crate::{error::Erc8128Error, sign::validate_label, types::SignatureParams};
 
 /// Quote a value as an sf-string: `"value"` with `\` and `"` escaped.
 ///

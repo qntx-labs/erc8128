@@ -2,9 +2,10 @@ use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    Binding, ContentDigest, Erc8128Error, Replay, Request, SignOptions, SignedHeaders,
+    error::Erc8128Error,
     keyid::format_keyid,
     sf::{quote_sf_string, serialize_signature_params},
+    types::{Binding, ContentDigest, Replay, Request, SignOptions, SignedHeaders},
 };
 
 /// Sign an HTTP request according to ERC-8128.
@@ -18,7 +19,7 @@ use crate::{
 /// inconsistent, or the signer produces an empty signature.
 pub async fn sign_request(
     request: &Request<'_>,
-    signer: &impl crate::Signer,
+    signer: &impl crate::traits::Signer,
     opts: &SignOptions,
 ) -> Result<SignedHeaders, Erc8128Error> {
     let url = parse_url(request.url)?;
@@ -64,7 +65,7 @@ pub async fn sign_request(
         &mut components,
     )?;
 
-    let params = crate::SignatureParams {
+    let params = crate::types::SignatureParams {
         created,
         expires,
         keyid,

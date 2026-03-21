@@ -3,11 +3,12 @@ use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
 use crate::{
-    Binding, Erc8128Error, NonceStore, Request, SignatureParams, Verifier, VerifyPolicy,
-    VerifySuccess,
+    error::Erc8128Error,
     keyid::parse_keyid,
     sf::{parse_signature_dictionary, parse_signature_input_dictionary},
     sign,
+    traits::{NonceStore, Verifier},
+    types::{Binding, Request, SignatureParams, VerifyPolicy, VerifySuccess},
 };
 
 /// Verify a signed HTTP request according to ERC-8128.
