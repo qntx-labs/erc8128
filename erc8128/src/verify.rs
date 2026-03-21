@@ -1,5 +1,5 @@
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
-use sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256, Sha512};
 use subtle::ConstantTimeEq;
 
 use crate::{
@@ -7,14 +7,19 @@ use crate::{
     keyid::parse_keyid,
     sf::{parse_signature_dictionary, parse_signature_input_dictionary},
     sign,
-    traits::{NonceStore, Verifier},
-    types::{Binding, Request, SignatureParams, VerifyPolicy, VerifySuccess},
+    traits::{NonceStore, ReplayablePolicy, Verifier},
+    types::{Binding, ReplayableInfo, Request, SignatureParams, VerifyPolicy, VerifySuccess},
 };
 
 /// Verify a signed HTTP request according to ERC-8128.
 ///
-/// Use [`NoNonceStore`](crate::NoNonceStore) if your policy only allows
-/// replayable signatures and you don't need nonce tracking.
+/// # Parameters
+///
+/// - `verifier` — cryptographic signature verifier (EOA / SCA)
+/// - `nonce_store` — replay-prevention nonce store
+/// - `replayable` — policy for replayable (nonce-less) signatures;
+///   use [`RejectReplayable`](crate::RejectReplayable) to reject all
+/// - `policy` — time, binding, and label policy
 ///
 /// # Errors
 ///
@@ -23,6 +28,7 @@ pub async fn verify_request(
     request: &Request<'_>,
     verifier: &impl Verifier,
     nonce_store: &impl NonceStore,
+    replayable_policy: &impl ReplayablePolicy,
     policy: &VerifyPolicy,
 ) -> Result<VerifySuccess, Erc8128Error> {
     let sig_input_raw =
@@ -107,11 +113,21 @@ pub async fn verify_request(
             continue;
         }
 
-        if replayable && !policy.allow_replayable {
-            last_err = Erc8128Error::ReplayableNotAllowed;
-            continue;
+        // Replayable checks (Section 3.2.2 + 5.2)
+        if replayable {
+            if !replayable_policy.allow() {
+                last_err = Erc8128Error::NonceRequired;
+                continue;
+            }
+            if let Some(not_before) = replayable_policy.not_before(&candidate.params.keyid).await
+                && candidate.params.created < not_before
+            {
+                last_err = Erc8128Error::ReplayableNotBefore;
+                continue;
+            }
         }
 
+        // Non-replayable nonce window check
         if !replayable
             && let Some(max_window) = policy.max_nonce_window_sec
             && candidate.params.expires - candidate.params.created > max_window
@@ -135,17 +151,34 @@ pub async fn verify_request(
             None,
         )?;
 
-        let sig_bytes = BASE64
-            .decode(&candidate.sig_b64)
-            .map_err(|_| Erc8128Error::BadSignature)?;
+        let sig_bytes = match BASE64.decode(&candidate.sig_b64) {
+            Ok(b) if !b.is_empty() => b,
+            _ => {
+                last_err = Erc8128Error::BadSignatureBytes;
+                continue;
+            }
+        };
 
-        if sig_bytes.is_empty() {
-            last_err = Erc8128Error::BadSignature;
-            continue;
+        // Replayable invalidation check (before expensive crypto verification)
+        if replayable {
+            let info = ReplayableInfo {
+                keyid: &candidate.params.keyid,
+                created: candidate.params.created,
+                expires: candidate.params.expires,
+                label: &candidate.label,
+                signature: &sig_bytes,
+                signature_base: &signature_base,
+                params_value: &candidate.params_value,
+            };
+            if replayable_policy.invalidated(&info).await {
+                last_err = Erc8128Error::ReplayableInvalidated;
+                continue;
+            }
         }
 
         match verifier.verify(address, &signature_base, &sig_bytes).await {
             Ok(()) => {
+                // Nonce consumption (atomic, after successful verification)
                 if let Some(nonce) = candidate.params.nonce.as_deref() {
                     let key = format!("{}:{nonce}", candidate.params.keyid);
                     let ttl = candidate.params.expires.saturating_sub(now);
@@ -255,17 +288,26 @@ const fn check_time(
 
 fn verify_content_digest(request: &Request<'_>) -> Result<(), Erc8128Error> {
     let header_val = find_header(request, "content-digest").ok_or(Erc8128Error::DigestRequired)?;
-
     let s = header_val.trim();
-    let rest = s
-        .strip_prefix("sha-256=:")
-        .ok_or(Erc8128Error::DigestMismatch)?;
-    let claimed_b64 = rest.strip_suffix(':').ok_or(Erc8128Error::DigestMismatch)?;
-
     let body = request.body.unwrap_or_default();
-    let actual_b64 = BASE64.encode(Sha256::digest(body));
 
-    if bool::from(claimed_b64.as_bytes().ct_eq(actual_b64.as_bytes())) {
+    if let Some(rest) = s.strip_prefix("sha-256=:") {
+        let claimed = rest.strip_suffix(':').ok_or(Erc8128Error::DigestMismatch)?;
+        let actual = BASE64.encode(Sha256::digest(body));
+        return ct_eq_or_mismatch(claimed, &actual);
+    }
+
+    if let Some(rest) = s.strip_prefix("sha-512=:") {
+        let claimed = rest.strip_suffix(':').ok_or(Erc8128Error::DigestMismatch)?;
+        let actual = BASE64.encode(Sha512::digest(body));
+        return ct_eq_or_mismatch(claimed, &actual);
+    }
+
+    Err(Erc8128Error::DigestMismatch)
+}
+
+fn ct_eq_or_mismatch(a: &str, b: &str) -> Result<(), Erc8128Error> {
+    if bool::from(a.as_bytes().ct_eq(b.as_bytes())) {
         Ok(())
     } else {
         Err(Erc8128Error::DigestMismatch)

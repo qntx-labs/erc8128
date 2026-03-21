@@ -31,7 +31,7 @@ use axum::extract::Request;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 
-use crate::traits::{NonceStore, Verifier};
+use crate::traits::{NonceStore, ReplayablePolicy, Verifier};
 use crate::types::VerifyPolicy;
 
 /// Tower [`Layer`] that verifies ERC-8128 signatures on incoming requests.
@@ -39,19 +39,21 @@ use crate::types::VerifyPolicy;
 /// On success, [`VerifySuccess`](crate::VerifySuccess) is inserted into
 /// request extensions. On failure, responds with `401 Unauthorized`.
 #[derive(Clone)]
-pub struct Erc8128Layer<V, N> {
+pub struct Erc8128Layer<V, N, R> {
     verifier: Arc<V>,
     nonce_store: Arc<N>,
+    replayable: Arc<R>,
     policy: VerifyPolicy,
     max_body_size: usize,
 }
 
-impl<V, N> Erc8128Layer<V, N> {
+impl<V, N, R> Erc8128Layer<V, N, R> {
     /// Create a new verification layer.
-    pub fn new(verifier: V, nonce_store: N, policy: VerifyPolicy) -> Self {
+    pub fn new(verifier: V, nonce_store: N, replayable: R, policy: VerifyPolicy) -> Self {
         Self {
             verifier: Arc::new(verifier),
             nonce_store: Arc::new(nonce_store),
+            replayable: Arc::new(replayable),
             policy,
             max_body_size: 2 * 1024 * 1024,
         }
@@ -65,7 +67,9 @@ impl<V, N> Erc8128Layer<V, N> {
     }
 }
 
-impl<V: std::fmt::Debug, N: std::fmt::Debug> std::fmt::Debug for Erc8128Layer<V, N> {
+impl<V: std::fmt::Debug, N: std::fmt::Debug, R: std::fmt::Debug> std::fmt::Debug
+    for Erc8128Layer<V, N, R>
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Erc8128Layer")
             .field("max_body_size", &self.max_body_size)
@@ -73,18 +77,20 @@ impl<V: std::fmt::Debug, N: std::fmt::Debug> std::fmt::Debug for Erc8128Layer<V,
     }
 }
 
-impl<S, V, N> tower::Layer<S> for Erc8128Layer<V, N>
+impl<S, V, N, R> tower::Layer<S> for Erc8128Layer<V, N, R>
 where
     V: Clone,
     N: Clone,
+    R: Clone,
 {
-    type Service = Erc8128Service<S, V, N>;
+    type Service = Erc8128Service<S, V, N, R>;
 
     fn layer(&self, inner: S) -> Self::Service {
         Erc8128Service {
             inner,
             verifier: Arc::clone(&self.verifier),
             nonce_store: Arc::clone(&self.nonce_store),
+            replayable: Arc::clone(&self.replayable),
             policy: self.policy.clone(),
             max_body_size: self.max_body_size,
         }
@@ -95,21 +101,23 @@ where
 ///
 /// Created by [`Erc8128Layer`]. Not typically used directly.
 #[derive(Debug, Clone)]
-pub struct Erc8128Service<S, V, N> {
+pub struct Erc8128Service<S, V, N, R> {
     inner: S,
     verifier: Arc<V>,
     nonce_store: Arc<N>,
+    replayable: Arc<R>,
     policy: VerifyPolicy,
     max_body_size: usize,
 }
 
-impl<S, V, N> tower::Service<Request<Body>> for Erc8128Service<S, V, N>
+impl<S, V, N, R> tower::Service<Request<Body>> for Erc8128Service<S, V, N, R>
 where
     S: tower::Service<Request<Body>, Response = Response> + Clone + Send + 'static,
     S::Future: Send + 'static,
     S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
     V: Verifier + 'static,
     N: NonceStore + 'static,
+    R: ReplayablePolicy + 'static,
 {
     type Response = Response;
     type Error = S::Error;
@@ -123,6 +131,7 @@ where
         let mut inner = self.inner.clone();
         let verifier = Arc::clone(&self.verifier);
         let nonce_store = Arc::clone(&self.nonce_store);
+        let replayable = Arc::clone(&self.replayable);
         let policy = self.policy.clone();
         let max_body_size = self.max_body_size;
 
@@ -174,6 +183,7 @@ where
                 &req,
                 verifier.as_ref(),
                 nonce_store.as_ref(),
+                replayable.as_ref(),
                 &policy,
             )
             .await

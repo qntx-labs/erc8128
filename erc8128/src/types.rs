@@ -88,6 +88,8 @@ pub struct SignOptions {
     pub content_digest: ContentDigest,
     /// Override or extend the signed components.
     pub components: Option<Vec<String>>,
+    /// Application-specific tag (e.g. `"erc8128-login"`).
+    pub tag: Option<String>,
 }
 
 /// Headers produced by [`sign_request`](crate::sign_request).
@@ -120,6 +122,26 @@ pub struct VerifySuccess {
     pub binding: Binding,
 }
 
+/// Information about a replayable signature, passed to
+/// [`ReplayablePolicy::invalidated`](crate::ReplayablePolicy::invalidated).
+#[derive(Debug, Clone)]
+pub struct ReplayableInfo<'a> {
+    /// Identity: `erc8128:<chainId>:<address>`.
+    pub keyid: &'a str,
+    /// Unix timestamp when the signature was created.
+    pub created: u64,
+    /// Unix timestamp when the signature expires.
+    pub expires: u64,
+    /// Signature label (e.g. `"eth"`).
+    pub label: &'a str,
+    /// Raw decoded signature bytes.
+    pub signature: &'a [u8],
+    /// Reconstructed RFC 9421 signature base.
+    pub signature_base: &'a [u8],
+    /// Raw `Signature-Input` member value.
+    pub params_value: &'a str,
+}
+
 /// Policy for [`verify_request`](crate::verify_request).
 #[derive(Debug, Clone)]
 pub struct VerifyPolicy {
@@ -127,8 +149,6 @@ pub struct VerifyPolicy {
     pub label: Option<String>,
     /// Require exact label match (default: `false`).
     pub strict_label: bool,
-    /// Allow replayable (nonce-less) signatures (default: `false`).
-    pub allow_replayable: bool,
     /// Maximum allowed validity window in seconds (default: 300).
     pub max_validity_sec: u64,
     /// Allowed clock drift in seconds (default: 0).
@@ -152,7 +172,6 @@ impl Default for VerifyPolicy {
         Self {
             label: None,
             strict_label: false,
-            allow_replayable: false,
             max_validity_sec: 300,
             clock_skew_sec: 0,
             max_nonce_window_sec: None,

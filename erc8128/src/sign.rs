@@ -70,7 +70,7 @@ pub async fn sign_request(
         expires,
         keyid,
         nonce,
-        tag: None,
+        tag: opts.tag.clone(),
     };
 
     let params_value = serialize_signature_params(&components, &params)?;

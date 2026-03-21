@@ -5,7 +5,7 @@ use std::future::Future;
 use std::sync::{Arc, Mutex};
 
 use crate::error::Erc8128Error;
-use crate::types::Address;
+use crate::types::{Address, ReplayableInfo};
 
 /// Ethereum message signer.
 ///
@@ -87,6 +87,44 @@ pub struct NoNonceStore;
 
 impl NonceStore for NoNonceStore {
     async fn consume(&self, _key: &str, _ttl_seconds: u64) -> bool {
+        false
+    }
+}
+
+/// Policy for replayable (nonce-less) signature acceptance and invalidation.
+///
+/// Required by ERC-8128 Section 3.2.2 + 5.2: verifiers that accept
+/// replayable signatures **MUST** implement early invalidation mechanisms.
+///
+/// Use [`RejectReplayable`] (default) to reject all replayable signatures.
+pub trait ReplayablePolicy: Send + Sync {
+    /// Whether to accept replayable (nonce-less) signatures.
+    fn allow(&self) -> bool;
+
+    /// Return a `not_before` timestamp for the given `keyid`.
+    /// Signatures with `created < not_before` are rejected.
+    /// Return `None` to skip this check.
+    fn not_before(&self, keyid: &str) -> impl Future<Output = Option<u64>> + Send;
+
+    /// Check if a specific replayable signature has been invalidated.
+    /// Return `true` to reject the signature.
+    fn invalidated(&self, info: &ReplayableInfo<'_>) -> impl Future<Output = bool> + Send;
+}
+
+/// Reject all replayable signatures (default secure behavior).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RejectReplayable;
+
+impl ReplayablePolicy for RejectReplayable {
+    fn allow(&self) -> bool {
+        false
+    }
+
+    async fn not_before(&self, _keyid: &str) -> Option<u64> {
+        None
+    }
+
+    async fn invalidated(&self, _info: &ReplayableInfo<'_>) -> bool {
         false
     }
 }

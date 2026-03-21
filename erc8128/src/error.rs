@@ -64,9 +64,21 @@ pub enum Erc8128Error {
     #[error("validity too long")]
     ValidityTooLong,
 
+    /// Non-replayable signature requires a nonce but none was provided.
+    #[error("nonce required")]
+    NonceRequired,
+
     /// Replayable (nonce-less) signature rejected by policy.
     #[error("replayable not allowed")]
     ReplayableNotAllowed,
+
+    /// Replayable signature rejected: `created` before the per-key `not_before` cutoff.
+    #[error("replayable not before")]
+    ReplayableNotBefore,
+
+    /// Replayable signature explicitly invalidated by policy hook.
+    #[error("replayable invalidated")]
+    ReplayableInvalidated,
 
     /// Signed components do not satisfy request-bound requirements.
     #[error("not request bound")]
@@ -88,6 +100,10 @@ pub enum Erc8128Error {
     #[error("digest mismatch")]
     DigestMismatch,
 
+    /// Signature bytes could not be decoded (bad base64 or empty).
+    #[error("bad signature bytes")]
+    BadSignatureBytes,
+
     /// The signature is cryptographically invalid.
     #[error("bad signature")]
     BadSignature,
@@ -95,6 +111,10 @@ pub enum Erc8128Error {
     /// The nonce has already been consumed (replay detected).
     #[error("replay detected")]
     Replay,
+
+    /// Algorithm is not allowed by policy.
+    #[error("algorithm not allowed")]
+    AlgNotAllowed,
 
     /// The cryptographic verification call itself failed (e.g. RPC error).
     #[error("verification failed: {0}")]

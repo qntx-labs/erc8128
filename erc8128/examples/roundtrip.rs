@@ -6,7 +6,7 @@
 //! ```
 
 use erc8128::{
-    MemoryNonceStore, Request, SignOptions, VerifyPolicy,
+    MemoryNonceStore, RejectReplayable, Request, SignOptions, VerifyPolicy,
     eoa::{EoaSigner, EoaVerifier},
     sign_request, verify_request,
 };
@@ -42,8 +42,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ..request
     };
     let nonces = MemoryNonceStore::default();
-    let result =
-        verify_request(&verify_req, &EoaVerifier, &nonces, &VerifyPolicy::default()).await?;
+    let result = verify_request(
+        &verify_req,
+        &EoaVerifier,
+        &nonces,
+        &RejectReplayable,
+        &VerifyPolicy::default(),
+    )
+    .await?;
 
     println!(
         "\n✓ Verified: address={} chain_id={}",

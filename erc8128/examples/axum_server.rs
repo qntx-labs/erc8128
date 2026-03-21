@@ -7,7 +7,8 @@
 
 use axum::{Extension, Router, routing::post};
 use erc8128::{
-    MemoryNonceStore, VerifyPolicy, VerifySuccess, eoa::EoaVerifier, middleware::Erc8128Layer,
+    MemoryNonceStore, RejectReplayable, VerifyPolicy, VerifySuccess, eoa::EoaVerifier,
+    middleware::Erc8128Layer,
 };
 
 async fn handler(Extension(auth): Extension<VerifySuccess>) -> String {
@@ -21,6 +22,7 @@ async fn main() {
         .layer(Erc8128Layer::new(
             EoaVerifier,
             MemoryNonceStore::default(),
+            RejectReplayable,
             VerifyPolicy::default(),
         ));
 

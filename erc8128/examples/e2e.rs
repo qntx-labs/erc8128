@@ -9,7 +9,7 @@
 
 use axum::{Extension, Router, routing::post};
 use erc8128::{
-    MemoryNonceStore, Request, SignOptions, VerifyPolicy, VerifySuccess,
+    MemoryNonceStore, RejectReplayable, Request, SignOptions, VerifyPolicy, VerifySuccess,
     client::{RequestBuilderExt, signed_fetch},
     eoa::{EoaSigner, EoaVerifier},
     middleware::Erc8128Layer,
@@ -28,6 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .layer(Erc8128Layer::new(
             EoaVerifier,
             MemoryNonceStore::default(),
+            RejectReplayable,
             VerifyPolicy::default(),
         ));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
