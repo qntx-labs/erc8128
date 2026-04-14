@@ -12,7 +12,7 @@ description = "Signed HTTP Requests with Ethereum."
 
 [workspace.dependencies]
 alloy-primitives = "1"
-alloy-signer = "1"
+alloy-signer = "2"
 axum = "0.8"
 base64 = "0.22"
 http-body-util = "0.1"
