@@ -41,9 +41,9 @@ dependencies = [
 
 [[package]]
 name = "alloy-signer"
-version = "2.0.0"
+version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84b8ad9890b212e224291024b1aecfeef72127d27a2f6eebc5e347c40275c4bf"
+checksum = "c5da9ae50f9b48d7b4e2e5cde87175257be7e5e56909a7794720597c1d9806f6"
 dependencies = [
  "alloy-primitives",
  "async-trait",
@@ -2101,7 +2101,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "once_cell",
  "rustix",
  "windows-sys",
