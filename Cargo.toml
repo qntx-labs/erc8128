@@ -14,7 +14,7 @@ description = "Signed HTTP Requests with Ethereum."
 alloy-primitives = "1"
 alloy-signer = "2"
 axum = "0.8"
-base64 = "0.22"
+base64 = "0.23"
 http-body-util = "0.1"
 k256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
 rand = "0.10"
